@@ -33,14 +33,10 @@ Tray interactions:
 
 ## Limitations
 
-A software overlay cannot dim:
-
-- The hardware cursor
-- Exclusive-fullscreen games
-- HDR content
-- Some fullscreen video players
-
-Everything else (desktop, browsers, windowed apps, windowed video) dims fine.
+Anything that renders above a normal top-most window punches through the
+overlay: the hardware cursor, context menus and popups, other always-on-top
+apps, fullscreen games, HDR content, and video in apps like Teams. Regular
+desktop, browser, and app windows dim fine.
 
 If your monitor supports **DDC/CI**, use that instead for real hardware
 brightness control. This tool is for displays (like many TVs used as
