@@ -1,8 +1,7 @@
-"""Multi-monitor click-through dimming overlay for Windows, tray edition.
+"""Multi-monitor click-through dimming overlay for Windows, tray-only.
 
-Runs in the system tray with a moon icon. Left-click the tray icon to open
-a small slider; right-click for presets and quick actions. Overlays stay
-up in the background.
+Runs in the system tray with a moon icon. Right-click for a list of dim
+levels or to quit. Left-click sets dim to 0. Overlays run in the background.
 
 Self-bootstraps a venv at  ~/venvs/.venv_virtualdim  and installs
 pystray + pillow on first run.
@@ -59,7 +58,6 @@ from PIL import Image, ImageDraw
 import pystray
 
 user32 = ctypes.windll.user32
-dwmapi = ctypes.windll.dwmapi
 user32.SetProcessDPIAware()
 
 GWL_EXSTYLE = -20
@@ -68,9 +66,6 @@ WS_EX_TRANSPARENT = 0x00000020
 WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_NOACTIVATE = 0x08000000
 LWA_ALPHA = 0x00000002
-
-DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-DWMWA_USE_IMMERSIVE_DARK_MODE_OLD = 19  # Windows 10 pre-20H1
 
 GetWL = user32.GetWindowLongPtrW
 SetWL = user32.SetWindowLongPtrW
@@ -88,21 +83,6 @@ GA_ROOT = 2
 GetAncestor = user32.GetAncestor
 GetAncestor.argtypes = [wintypes.HWND, ctypes.c_uint]
 GetAncestor.restype = wintypes.HWND
-
-dwmapi.DwmSetWindowAttribute.argtypes = [
-    wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
-dwmapi.DwmSetWindowAttribute.restype = ctypes.c_long
-
-
-def enable_dark_titlebar(hwnd):
-    val = ctypes.c_int(1)
-    # Try the modern attribute first, fall back to the older one.
-    if dwmapi.DwmSetWindowAttribute(
-            hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
-            ctypes.byref(val), ctypes.sizeof(val)) != 0:
-        dwmapi.DwmSetWindowAttribute(
-            hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE_OLD,
-            ctypes.byref(val), ctypes.sizeof(val))
 
 
 class RECT(ctypes.Structure):
@@ -154,37 +134,15 @@ def make_moon_icon(size=64):
     return img
 
 
-PRESETS = [0, 10, 20, 30, 40, 50, 60, 70, 80]
+LEVELS = [0, 10, 20, 30, 40, 50, 60, 70, 80]
 
 
 class Dimmer:
     def __init__(self):
-        BG = "#151517"
-        FG = "#d8d8df"
-        ACC = "#2a2a30"
+        self.level = 0
 
         self.root = tk.Tk()
         self.root.withdraw()
-        self.root.title("VirtualDim")
-        self.root.resizable(False, False)
-        self.root.configure(bg=BG)
-        self.root.protocol("WM_DELETE_WINDOW", self.hide_slider)
-        self.root.update_idletasks()
-        enable_dark_titlebar(root_hwnd(self.root.winfo_id()))
-
-        self.val = tk.DoubleVar(value=0.0)
-
-        frm = tk.Frame(self.root, padx=12, pady=10, bg=BG)
-        frm.pack()
-        tk.Label(frm, text="Dim", bg=BG, fg=FG).grid(row=0, column=0, sticky="w")
-        tk.Scale(frm, from_=0, to=85, orient="horizontal", length=260,
-                 variable=self.val, command=self._on_change, showvalue=True,
-                 bg=BG, fg=FG, troughcolor=ACC, highlightthickness=0,
-                 activebackground=FG, borderwidth=0
-                 ).grid(row=0, column=1, padx=8)
-        tk.Button(frm, text="Off", command=lambda: self._set(0),
-                  bg=ACC, fg=FG, activebackground=FG, activeforeground=BG,
-                  borderwidth=0, padx=10).grid(row=0, column=2)
 
         self.overlays = []
         for x, y, w, h in enumerate_monitors():
@@ -198,60 +156,38 @@ class Dimmer:
             set_overlay_style(hwnd)
             set_overlay_alpha(hwnd, 0.0)
             ov.after(50, lambda h=hwnd: (set_overlay_style(h),
-                                          set_overlay_alpha(h, self._alpha())))
+                                          set_overlay_alpha(h, self.level / 100.0)))
             self.overlays.append((ov, hwnd))
 
-        def preset_item(p):
+        def level_item(p):
             return pystray.MenuItem(
-                f"{p}%",
+                f"{p}%" if p > 0 else "Off",
                 lambda _i, _it, pp=p: self.root.after(0, lambda: self._set(pp)),
-                checked=lambda _it, pp=p: int(round(self.val.get())) == pp,
-                radio=True)
+                checked=lambda _it, pp=p: self.level == pp,
+                radio=True,
+                default=(p == 0))
 
         self.tray = pystray.Icon(
             "virtualdim",
             make_moon_icon(),
             "VirtualDim",
             menu=pystray.Menu(
-                pystray.MenuItem("Slider", self._tray_show, default=True),
-                pystray.Menu.SEPARATOR,
-                pystray.MenuItem(
-                    "Level",
-                    pystray.Menu(*(preset_item(p) for p in PRESETS))),
+                *(level_item(p) for p in LEVELS),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Quit", self._tray_quit),
             ),
         )
         threading.Thread(target=self.tray.run, daemon=True).start()
 
-    def _alpha(self):
-        return float(self.val.get()) / 100.0
-
-    def _on_change(self, _):
-        a = self._alpha()
+    def _set(self, p):
+        self.level = p
+        a = p / 100.0
         for _ov, hwnd in self.overlays:
             set_overlay_alpha(hwnd, a)
         try:
             self.tray.update_menu()
         except Exception:
             pass
-
-    def _set(self, v):
-        self.val.set(v)
-        self._on_change(None)
-
-    def show_slider(self):
-        self.root.deiconify()
-        self.root.lift()
-        sw = self.root.winfo_screenwidth()
-        sh = self.root.winfo_screenheight()
-        self.root.geometry(f"+{sw - 380}+{sh - 140}")
-
-    def hide_slider(self):
-        self.root.withdraw()
-
-    def _tray_show(self, _icon, _item):
-        self.root.after(0, self.show_slider)
 
     def _tray_quit(self, _icon, _item):
         self.root.after(0, self.quit)
