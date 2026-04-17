@@ -160,10 +160,16 @@ class Dimmer:
             self.overlays.append((ov, hwnd))
 
         def level_item(p):
+            def on_click(_icon, _item):
+                self.root.after(0, lambda: self._set(p))
+
+            def is_checked(_item):
+                return self.level == p
+
             return pystray.MenuItem(
                 f"{p}%" if p > 0 else "Off",
-                lambda _i, _it, pp=p: self.root.after(0, lambda: self._set(pp)),
-                checked=lambda _it, pp=p: self.level == pp,
+                on_click,
+                checked=is_checked,
                 radio=True,
                 default=(p == 0))
 
