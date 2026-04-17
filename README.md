@@ -11,7 +11,9 @@ Self-bootstraps its own venv on first run.
 ## Features
 
 - Multi-monitor, DPI-aware, click-through overlays
-- Tray-only UI: right-click for a list of dim levels (0–80%) and Quit
+- Tray-only UI: right-click for a list of dim levels (80% → 0%) and Quit
+- Left-click toggles between 0 and the last non-zero level
+- Smooth 500ms cubic ease-in-out fade between levels
 - No console window after first launch (runs under `pythonw.exe`)
 
 ## Usage
@@ -26,8 +28,8 @@ double-click the `.pyw` file — no console.
 
 Tray interactions:
 
-- **Left-click** — sets dim to 0 (undim)
-- **Right-click** — pick a level (0/10/…/80%) or Quit
+- **Left-click** — toggle between 0 and the last non-zero level
+- **Right-click** — pick a level (80% / 70% / … / 0% (disabled)) or Quit
 
 ## Limitations
 
