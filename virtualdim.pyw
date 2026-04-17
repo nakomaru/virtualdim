@@ -141,6 +141,8 @@ class Dimmer:
     def __init__(self):
         self.level = 0
         self.last_nonzero = 40
+        self._anim_job = None
+        self._current_alpha = 0.0
 
         self.root = tk.Tk()
         self.root.withdraw()
@@ -186,17 +188,51 @@ class Dimmer:
         )
         threading.Thread(target=self.tray.run, daemon=True).start()
 
+    def _apply_alpha(self, a):
+        self._current_alpha = a
+        for _ov, hwnd in self.overlays:
+            set_overlay_alpha(hwnd, a)
+
     def _set(self, p):
         self.level = p
         if p > 0:
             self.last_nonzero = p
-        a = p / 100.0
-        for _ov, hwnd in self.overlays:
-            set_overlay_alpha(hwnd, a)
+        self._animate_to(p / 100.0, duration_ms=500)
         try:
             self.tray.update_menu()
         except Exception:
             pass
+
+    def _animate_to(self, target, duration_ms=500, step_ms=16):
+        if self._anim_job is not None:
+            try:
+                self.root.after_cancel(self._anim_job)
+            except Exception:
+                pass
+            self._anim_job = None
+
+        start = self._current_alpha
+        delta = target - start
+        if abs(delta) < 1e-4 or duration_ms <= 0:
+            self._apply_alpha(target)
+            return
+
+        steps = max(1, duration_ms // step_ms)
+        i = {"n": 0}
+
+        def ease(t):  # cubic in-out
+            return 3 * t * t - 2 * t * t * t
+
+        def tick():
+            i["n"] += 1
+            t = min(1.0, i["n"] / steps)
+            self._apply_alpha(start + delta * ease(t))
+            if t < 1.0:
+                self._anim_job = self.root.after(step_ms, tick)
+            else:
+                self._anim_job = None
+
+        self._anim_job = self.root.after(step_ms, tick)
 
     def _toggle(self):
         self._set(0 if self.level > 0 else self.last_nonzero)
