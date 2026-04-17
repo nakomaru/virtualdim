@@ -134,12 +134,13 @@ def make_moon_icon(size=64):
     return img
 
 
-LEVELS = [0, 10, 20, 30, 40, 50, 60, 70, 80]
+LEVELS = [80, 70, 60, 50, 40, 30, 20, 10, 0]
 
 
 class Dimmer:
     def __init__(self):
         self.level = 0
+        self.last_nonzero = 40
 
         self.root = tk.Tk()
         self.root.withdraw()
@@ -166,18 +167,18 @@ class Dimmer:
             def is_checked(_item):
                 return self.level == p
 
-            return pystray.MenuItem(
-                f"{p}%" if p > 0 else "Off",
-                on_click,
-                checked=is_checked,
-                radio=True,
-                default=(p == 0))
+            label = "0% (disabled)" if p == 0 else f"{p}%"
+            return pystray.MenuItem(label, on_click, checked=is_checked, radio=True)
+
+        def on_toggle(_icon, _item):
+            self.root.after(0, self._toggle)
 
         self.tray = pystray.Icon(
             "virtualdim",
             make_moon_icon(),
             "VirtualDim",
             menu=pystray.Menu(
+                pystray.MenuItem("Toggle", on_toggle, default=True, visible=False),
                 *(level_item(p) for p in LEVELS),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Quit", self._tray_quit),
@@ -187,6 +188,8 @@ class Dimmer:
 
     def _set(self, p):
         self.level = p
+        if p > 0:
+            self.last_nonzero = p
         a = p / 100.0
         for _ov, hwnd in self.overlays:
             set_overlay_alpha(hwnd, a)
@@ -194,6 +197,9 @@ class Dimmer:
             self.tray.update_menu()
         except Exception:
             pass
+
+    def _toggle(self):
+        self._set(0 if self.level > 0 else self.last_nonzero)
 
     def _tray_quit(self, _icon, _item):
         self.root.after(0, self.quit)
