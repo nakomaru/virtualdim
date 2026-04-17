@@ -118,7 +118,7 @@ def make_moon_icon(size=64):
     return img
 
 
-LEVELS = [80, 70, 60, 50, 40, 30, 20, 10, 0]
+LEVELS = [90, 85, 80, 70, 60, 50, 40, 30, 20, 10, 0]
 
 
 class Dimmer:
