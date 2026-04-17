@@ -1,16 +1,19 @@
 # VirtualDim
 
-A tiny system-tray dimming overlay for Windows. Drops a black, click-through,
-always-on-top layer over every monitor so you can crank your displays darker
-than their hardware allows — useful when OLED/TV monitors are punishingly
-bright even at 0% brightness with dark mode maxed.
+A tiny system-tray dimmer for Windows. Scales RGB output via the
+Magnification API (the same path Windows' own Color Filters use), so you
+can drop the whole display darker than the hardware allows — useful when
+OLED/TV monitors are punishingly bright even at 0% brightness with dark
+mode maxed.
 
 Pure Python standard library + `pystray` + `pillow`. No admin needed.
 Self-bootstraps its own venv on first run.
 
 ## Features
 
-- Multi-monitor, DPI-aware, click-through overlays
+- True global dimming via `MagSetFullscreenColorEffect` — works on
+  context menus, popups, top-most windows, everything except the hardware
+  mouse cursor
 - Tray-only UI: right-click for a list of dim levels (80% → 0%) and Quit
 - Left-click toggles between 0 and the last non-zero level
 - Smooth 500ms cubic ease-in-out fade between levels
@@ -33,14 +36,13 @@ Tray interactions:
 
 ## Limitations
 
-Anything that renders above a normal top-most window punches through the
-overlay: the hardware cursor, context menus and popups, other always-on-top
-apps, fullscreen games, HDR content, and video in apps like Teams. Regular
-desktop, browser, and app windows dim fine.
+The hardware mouse cursor is drawn by the GPU after the Magnification
+transform, so it stays at full brightness. Exclusive-fullscreen games and
+HDR content may also bypass the effect.
 
-If your monitor supports **DDC/CI**, use that instead for real hardware
-brightness control. This tool is for displays (like many TVs used as
-monitors) where DDC/CI isn't available.
+If your monitor supports **DDC/CI**, use that for real hardware brightness
+control. This tool is for displays (like many TVs used as monitors) where
+DDC/CI isn't available.
 
 ## License
 

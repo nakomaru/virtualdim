@@ -1,7 +1,11 @@
-"""Multi-monitor click-through dimming overlay for Windows, tray-only.
+"""Global screen dimmer for Windows using the Magnification API.
 
 Runs in the system tray with a moon icon. Right-click for a list of dim
-levels or to quit. Left-click sets dim to 0. Overlays run in the background.
+levels or to quit. Left-click toggles between 0 and the last level.
+
+Uses MagSetFullscreenColorEffect to scale RGB output before scan-out,
+which dims basically everything — including context menus, popups, and
+top-most windows — except the hardware mouse cursor.
 
 Self-bootstraps a venv at  ~/venvs/.venv_virtualdim  and installs
 pystray + pillow on first run.
@@ -57,70 +61,50 @@ import tkinter as tk
 from PIL import Image, ImageDraw
 import pystray
 
-user32 = ctypes.windll.user32
-user32.SetProcessDPIAware()
 
-GWL_EXSTYLE = -20
-WS_EX_LAYERED = 0x00080000
-WS_EX_TRANSPARENT = 0x00000020
-WS_EX_TOOLWINDOW = 0x00000080
-WS_EX_NOACTIVATE = 0x08000000
-LWA_ALPHA = 0x00000002
+# Set per-monitor v2 DPI awareness BEFORE MagInitialize, otherwise
+# Magnification forces the process to "system DPI aware" and Windows
+# starts bitmap-scaling tray menus, popups, etc. (mud).
+_user32 = ctypes.windll.user32
+try:
+    _user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+    _user32.SetProcessDpiAwarenessContext.restype = ctypes.c_int
+    # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+    _user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+except (AttributeError, OSError):
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # per-monitor
+    except Exception:
+        _user32.SetProcessDPIAware()
 
-GetWL = user32.GetWindowLongPtrW
-SetWL = user32.SetWindowLongPtrW
-GetWL.restype = ctypes.c_ssize_t
-SetWL.restype = ctypes.c_ssize_t
-GetWL.argtypes = [wintypes.HWND, ctypes.c_int]
-SetWL.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
-
-SetLayeredWindowAttributes = user32.SetLayeredWindowAttributes
-SetLayeredWindowAttributes.argtypes = [wintypes.HWND, wintypes.COLORREF,
-                                       wintypes.BYTE, wintypes.DWORD]
-SetLayeredWindowAttributes.restype = wintypes.BOOL
-
-GA_ROOT = 2
-GetAncestor = user32.GetAncestor
-GetAncestor.argtypes = [wintypes.HWND, ctypes.c_uint]
-GetAncestor.restype = wintypes.HWND
+magnification = ctypes.windll.Magnification
 
 
-class RECT(ctypes.Structure):
-    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
-                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+class MAGCOLOREFFECT(ctypes.Structure):
+    _fields_ = [("transform", (ctypes.c_float * 5) * 5)]
 
 
-MonitorEnumProc = ctypes.WINFUNCTYPE(
-    ctypes.c_int, wintypes.HMONITOR, wintypes.HDC,
-    ctypes.POINTER(RECT), wintypes.LPARAM)
+magnification.MagInitialize.restype = wintypes.BOOL
+magnification.MagUninitialize.restype = wintypes.BOOL
+magnification.MagSetFullscreenColorEffect.argtypes = [
+    ctypes.POINTER(MAGCOLOREFFECT)]
+magnification.MagSetFullscreenColorEffect.restype = wintypes.BOOL
 
 
-def enumerate_monitors():
-    monitors = []
-
-    def _cb(hMon, hdc, lprc, lparam):
-        r = lprc.contents
-        monitors.append((r.left, r.top, r.right - r.left, r.bottom - r.top))
-        return 1
-
-    user32.EnumDisplayMonitors(0, 0, MonitorEnumProc(_cb), 0)
-    return monitors
+def _scale_matrix(s):
+    m = MAGCOLOREFFECT()
+    m.transform[0][0] = s
+    m.transform[1][1] = s
+    m.transform[2][2] = s
+    m.transform[3][3] = 1.0
+    m.transform[4][4] = 1.0
+    return m
 
 
-def root_hwnd(hwnd):
-    r = GetAncestor(hwnd, GA_ROOT)
-    return r or hwnd
-
-
-def set_overlay_style(hwnd):
-    style = GetWL(hwnd, GWL_EXSTYLE)
-    SetWL(hwnd, GWL_EXSTYLE,
-          style | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)
-
-
-def set_overlay_alpha(hwnd, alpha01):
-    b = max(0, min(255, int(round(alpha01 * 255))))
-    SetLayeredWindowAttributes(hwnd, 0, b, LWA_ALPHA)
+def mag_set_scale(s):
+    """Scale all RGB output by s (0..1)."""
+    m = _scale_matrix(max(0.0, min(1.0, s)))
+    return bool(magnification.MagSetFullscreenColorEffect(ctypes.byref(m)))
 
 
 def make_moon_icon(size=64):
@@ -142,25 +126,16 @@ class Dimmer:
         self.level = 0
         self.last_nonzero = 40
         self._anim_job = None
-        self._current_alpha = 0.0
+        self._current = 0.0  # current dim amount (0..1)
 
+        # Hidden tk root — used only for its main-thread message pump and
+        # after() scheduling. Magnification requires a message loop.
         self.root = tk.Tk()
         self.root.withdraw()
 
-        self.overlays = []
-        for x, y, w, h in enumerate_monitors():
-            ov = tk.Toplevel(self.root)
-            ov.overrideredirect(True)
-            ov.attributes("-topmost", True)
-            ov.configure(bg="black")
-            ov.geometry(f"{w}x{h}+{x}+{y}")
-            ov.update_idletasks()
-            hwnd = root_hwnd(ov.winfo_id())
-            set_overlay_style(hwnd)
-            set_overlay_alpha(hwnd, 0.0)
-            ov.after(50, lambda h=hwnd: (set_overlay_style(h),
-                                          set_overlay_alpha(h, self.level / 100.0)))
-            self.overlays.append((ov, hwnd))
+        if not magnification.MagInitialize():
+            raise RuntimeError("MagInitialize failed")
+        mag_set_scale(1.0)
 
         def level_item(p):
             def on_click(_icon, _item):
@@ -169,7 +144,12 @@ class Dimmer:
             def is_checked(_item):
                 return self.level == p
 
-            label = "0% (disabled)" if p == 0 else f"{p}%"
+            if p == 0:
+                label = "0% (off)"
+            elif p == max(LEVELS):
+                label = f"{p}% (darkest)"
+            else:
+                label = f"{p}%"
             return pystray.MenuItem(label, on_click, checked=is_checked, radio=True)
 
         def on_toggle(_icon, _item):
@@ -188,10 +168,12 @@ class Dimmer:
         )
         threading.Thread(target=self.tray.run, daemon=True).start()
 
-    def _apply_alpha(self, a):
-        self._current_alpha = a
-        for _ov, hwnd in self.overlays:
-            set_overlay_alpha(hwnd, a)
+    def _apply(self, a):
+        self._current = a
+        try:
+            mag_set_scale(1.0 - a)
+        except Exception:
+            pass
 
     def _set(self, p):
         self.level = p
@@ -211,10 +193,10 @@ class Dimmer:
                 pass
             self._anim_job = None
 
-        start = self._current_alpha
+        start = self._current
         delta = target - start
         if abs(delta) < 1e-4 or duration_ms <= 0:
-            self._apply_alpha(target)
+            self._apply(target)
             return
 
         steps = max(1, duration_ms // step_ms)
@@ -226,7 +208,7 @@ class Dimmer:
         def tick():
             i["n"] += 1
             t = min(1.0, i["n"] / steps)
-            self._apply_alpha(start + delta * ease(t))
+            self._apply(start + delta * ease(t))
             if t < 1.0:
                 self._anim_job = self.root.after(step_ms, tick)
             else:
@@ -242,15 +224,14 @@ class Dimmer:
 
     def quit(self):
         try:
+            mag_set_scale(1.0)
+            magnification.MagUninitialize()
+        except Exception:
+            pass
+        try:
             self.tray.stop()
         except Exception:
             pass
-        for ov, _h in self.overlays:
-            try:
-                ov.destroy()
-            except tk.TclError:
-                pass
-        self.overlays.clear()
         try:
             self.root.destroy()
         except tk.TclError:
