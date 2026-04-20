@@ -1,3 +1,5 @@
+> **Archived:** superseded by [mousecircledim](https://github.com/nakomaru/mousecircledim), which combines MouseCircle and VirtualDim into a single tray app.
+
 # VirtualDim
 
 A tiny system-tray dimmer for Windows. Scales RGB output via the
